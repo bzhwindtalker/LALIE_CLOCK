@@ -65,11 +65,12 @@ const WeatherOverlay: React.FC<WeatherOverlayProps> = React.memo(({ weather }) =
   }, []);
 
   const renderCloudShape = (type: string) => (
-    <div className="relative">
-       <div className="absolute w-32 h-12 bg-white rounded-full blur-[2px]" />
-       <div className="absolute -top-6 left-4 w-16 h-16 bg-white rounded-full blur-[2px]" />
-       <div className="absolute -top-4 left-14 w-12 h-12 bg-white rounded-full blur-[2px]" />
-    </div>
+    <svg viewBox="0 0 16 7" className="w-32 h-14 shape-rendering-crispEdges">
+      <rect x="3" y="1" width="6" height="5" fill="white" />
+      <rect x="1" y="3" width="14" height="3" fill="white" />
+      <rect x="5" y="0" width="3" height="2" fill="white" />
+      {type === 'fluffy' && <rect x="9" y="2" width="3" height="2" fill="white" />}
+    </svg>
   );
 
   return (

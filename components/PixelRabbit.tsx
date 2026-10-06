@@ -25,32 +25,34 @@ const PixelRabbit: React.FC<RabbitProps> = React.memo(({ clockState, weather }) 
   const lastLogicTick = useRef(0);
   const animationTimer = useRef<number | null>(null);
 
-  // --- RENDERER ---
+  // --- RENDERER (merges same-color runs into single rects: no seams, fewer nodes) ---
   const renderSprite = useCallback((grid: PixelGrid) => {
-    const pixels: React.ReactNode[] = [];
+    const rects: React.ReactNode[] = [];
     const height = grid.length;
     const width = grid[0].length;
-    
+
     grid.forEach((row, y) => {
-      for (let x = 0; x < row.length; x++) {
+      let x = 0;
+      while (x < row.length) {
         const char = row[x];
-        if (char !== '.') {
-          const color = PALETTE[char] || '#000';
-          pixels.push(
-            <rect 
-              key={`${x}-${y}`} 
-              x={x} y={y} 
-              width={1.05} height={1.05} 
-              fill={color} 
-            />
-          );
-        }
+        if (char === '.') { x++; continue; }
+        let run = 1;
+        while (x + run < row.length && row[x + run] === char) run++;
+        rects.push(
+          <rect
+            key={`${x}-${y}`}
+            x={x} y={y}
+            width={run} height={1}
+            fill={PALETTE[char] || '#000'}
+          />
+        );
+        x += run;
       }
     });
 
     return (
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full shape-rendering-crispEdges">
-        {pixels}
+        {rects}
       </svg>
     );
   }, []);
@@ -68,15 +70,14 @@ const PixelRabbit: React.FC<RabbitProps> = React.memo(({ clockState, weather }) 
         
         let nextAction: typeof action = 'IDLE';
         
-        // Vertical Wander & Depth Logic
-        const newY = Math.max(10, Math.min(45, posY + (Math.random() * 12 - 6)));
+        // Vertical Wander & Depth Logic — stay in the bottom band so text stays readable
+        const newY = Math.max(3, Math.min(14, posY + (Math.random() * 6 - 3)));
         setPosY(newY);
-        const newZ = newY > 30 ? 20 : 40;
+        const newZ = 20; // always behind the clock text (z-30)
         setZIndex(newZ);
 
         // Collision Avoidance Logic
         const inTextZone = posX > 25 && posX < 75;
-        const isInFront = newZ === 40;
 
         // Priority Overrides
         if (clockState === ClockState.SLEEP || clockState === ClockState.NAP) {
@@ -113,8 +114,8 @@ const PixelRabbit: React.FC<RabbitProps> = React.memo(({ clockState, weather }) 
              nextAction = 'IDLE';
            }
 
-           // Force move if idling in front of text
-           if (isInFront && inTextZone && nextAction === 'IDLE') {
+           // Force move if idling in the text zone (keeps the center clear)
+           if (inTextZone && nextAction === 'IDLE') {
                if (Math.random() < 0.8) {
                    nextAction = 'HOP';
                    if (posX > 50) setDirection(1); 
@@ -176,21 +177,10 @@ const PixelRabbit: React.FC<RabbitProps> = React.memo(({ clockState, weather }) 
   };
 
   const sprite = getCurrentSprite();
-  const widthRatio = (action === 'IDLE' || action === 'LOVE' || action === 'SNOWMAN') ? '180px' : '240px'; 
-  const heightRatio = '240px'; 
+  const widthRatio = (action === 'IDLE' || action === 'LOVE' || action === 'SNOWMAN') ? '130px' : (action === 'SLEEP' ? '190px' : '170px');
+  const heightRatio = '170px';
 
-  // --- PARTICLES ---
-  const renderZzz = () => {
-     if (action !== 'SLEEP') return null;
-     const step = Math.floor(frameIdx / 4) % 3; 
-     return (
-       <div className="absolute top-10 right-10 -mt-2 -mr-2 pointer-events-none z-50">
-         {step >= 0 && <div className="absolute top-4 right-2 w-2 h-2 bg-white opacity-80" />}
-         {step >= 1 && <div className="absolute top-0 right-6 w-3 h-3 bg-white opacity-60" />}
-         {step >= 2 && <div className="absolute -top-4 right-10 w-4 h-4 bg-white opacity-40 text-[10px] leading-none font-pixel text-blue-200">z</div>}
-       </div>
-     );
-  };
+  // Zzz is baked into the SLEEP sprite frames (see tools/gen_sprites.py)
   
   return (
     <div 
@@ -211,8 +201,7 @@ const PixelRabbit: React.FC<RabbitProps> = React.memo(({ clockState, weather }) 
           style={{ transform: `scaleX(${action === 'KITE' ? 1 : direction})` }} 
         >
             {renderSprite(sprite)}
-            {renderZzz()}
-        </div>
+          </div>
         <div className="absolute bottom-[20px] left-1/2 -translate-x-1/2 w-20 h-3 bg-black/40 rounded-full" style={{ filter: 'blur(2px)' }} />
     </div>
   );

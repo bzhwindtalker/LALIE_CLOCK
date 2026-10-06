@@ -19,7 +19,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onSave, onClose, 
   }, [config.demoMode]);
 
   const handleTimeChange = (key: keyof AppConfig, hour: string, minute: string) => {
-    if (['sleepTime', 'quietTime', 'wakeTime', 'napTime', 'storyTime'].includes(key)) {
+    if (['sleepTime', 'quietTime', 'wakeTime', 'wakeTimeWed', 'wakeTimeWeekend', 'napTime', 'storyTime'].includes(key)) {
         const newSchedule: TimeSchedule = {
           startHour: parseInt(hour) || 0,
           startMinute: parseInt(minute) || 0
@@ -110,8 +110,13 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ config, onSave, onClose, 
             <div className="space-y-4">
                 <h3 className="text-xl text-white font-pixel border-b border-white/30 pb-2">SCHEDULE</h3>
                 <div className="grid grid-cols-1 gap-4">
-                    <TimeInput label="WAKE UP" color="text-neon-green" value={localConfig.wakeTime} onChange={(h, m) => handleTimeChange('wakeTime', h, m)} />
-                    <TimeInput label="QUIET PLAY" color="text-yellow-400" value={localConfig.quietTime} onChange={(h, m) => handleTimeChange('quietTime', h, m)} />
+                    <TimeInput label="WAKE · SCHOOL" color="text-neon-green" value={localConfig.wakeTime} onChange={(h, m) => handleTimeChange('wakeTime', h, m)} />
+                    <TimeInput label="WAKE · WED" color="text-neon-green" value={localConfig.wakeTimeWed} onChange={(h, m) => handleTimeChange('wakeTimeWed', h, m)} />
+                    <TimeInput label="WAKE · WEEKEND" color="text-neon-green" value={localConfig.wakeTimeWeekend} onChange={(h, m) => handleTimeChange('wakeTimeWeekend', h, m)} />
+                    <TimeInput label="QUIET · SCHOOL" color="text-yellow-400" value={localConfig.quietTime} onChange={(h, m) => handleTimeChange('quietTime', h, m)} />
+                    <div className="text-xs text-white/40 px-1 -mt-2">
+                        SCHOOL = MON TUE THU FRI. WEEKEND = SAT SUN. QUIET STARTS THE SAME GAP BEFORE WAKE ON WED AND WEEKEND.
+                    </div>
                     
                     {/* Nap Section with Duration */}
                     <div className="bg-black/40 p-3 rounded border border-blue-900/50">

@@ -25,6 +25,8 @@ export const loadConfig = (): AppConfig => {
       // Ensure all new time schedules exist
       if (!parsed.napTime) parsed.napTime = DEFAULT_CONFIG.napTime;
       if (!parsed.storyTime) parsed.storyTime = DEFAULT_CONFIG.storyTime;
+      if (!parsed.wakeTimeWed) parsed.wakeTimeWed = DEFAULT_CONFIG.wakeTimeWed;
+      if (!parsed.wakeTimeWeekend) parsed.wakeTimeWeekend = DEFAULT_CONFIG.wakeTimeWeekend;
 
       // Ensure napDuration exists
       if (typeof parsed.napDuration !== 'number') parsed.napDuration = DEFAULT_CONFIG.napDuration;

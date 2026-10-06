@@ -52,7 +52,9 @@ export interface LocationConfig {
 export interface AppConfig {
   sleepTime: TimeSchedule;
   quietTime: TimeSchedule;
-  wakeTime: TimeSchedule;
+  wakeTime: TimeSchedule;        // school days: Mon, Tue, Thu, Fri
+  wakeTimeWed: TimeSchedule;     // Wednesday (no school)
+  wakeTimeWeekend: TimeSchedule; // Saturday + Sunday
   napTime: TimeSchedule;
   storyTime: TimeSchedule;
   napDuration: number; // Duration in minutes
@@ -63,6 +65,8 @@ export interface AppConfig {
 
 export const DEFAULT_CONFIG: AppConfig = {
   wakeTime: { startHour: 7, startMinute: 0 },
+  wakeTimeWed: { startHour: 7, startMinute: 30 },
+  wakeTimeWeekend: { startHour: 7, startMinute: 30 },
   napTime: { startHour: 13, startMinute: 0 },
   napDuration: 90, 
   quietTime: { startHour: 6, startMinute: 30 },

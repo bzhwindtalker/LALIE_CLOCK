@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>LALIE_CLOCK — sprite sheet</title>
+  <style>
+    body { background: #2b2140; color: #fff; font-family: monospace; margin: 16px; }
+    h2 { margin: 18px 0 6px; font-size: 14px; color: #ff9ecd; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    canvas { background: #8ed1fc22; image-rendering: pixelated; border: 1px solid #555; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">
+    import { SPRITES, PALETTE } from './components/PixelRabbitSprites.ts';
+    const params = new URLSearchParams(location.search);
+    const only = params.get('only') ? params.get('only').split(',') : null;
+    const SCALE = only && only.length === 1 ? 11 : 7;
+    const root = document.getElementById('root');
+    for (const [name, frames] of Object.entries(SPRITES)) {
+      if (only && !only.includes(name)) continue;
+      const h = document.createElement('h2');
+      h.textContent = name;
+      root.appendChild(h);
+      const row = document.createElement('div');
+      row.className = 'row';
+      frames.forEach((grid) => {
+        const cv = document.createElement('canvas');
+        cv.width = grid[0].length * SCALE;
+        cv.height = grid.length * SCALE;
+        const ctx = cv.getContext('2d');
+        grid.forEach((line, y) => {
+          for (let x = 0; x < line.length; x++) {
+            const c = line[x];
+            if (c === '.') continue;
+            ctx.fillStyle = PALETTE[c] || '#f0f';
+            ctx.fillRect(x * SCALE, y * SCALE, SCALE, SCALE);
+          }
+        });
+        row.appendChild(cv);
+      });
+      root.appendChild(row);
+    }
+  </script>
+</body>
+</html>

@@ -96,10 +96,24 @@ const App: React.FC = () => {
 
     if (isNapTime) return ClockState.NAP;
 
-    // 2. Standard Schedule Evaluation
+    // 2. Day-aware wake time (Wed + weekend sleep in)
+    //    Sunday=0, Wednesday=3, Saturday=6
+    const dow = now.getDay();
+    const dayWake = (dow === 0 || dow === 6)
+        ? config.wakeTimeWeekend
+        : (dow === 3 ? config.wakeTimeWed : config.wakeTime);
+    const wakeMins = getMinutes(dayWake.startHour, dayWake.startMinute);
+
+    // QUIET starts the same lead time before wake as on school days
+    const baseWake = getMinutes(config.wakeTime.startHour, config.wakeTime.startMinute);
+    const baseQuiet = getMinutes(config.quietTime.startHour, config.quietTime.startMinute);
+    const quietLead = ((baseWake - baseQuiet) % 1440 + 1440) % 1440;
+    const quietMins = ((wakeMins - quietLead) % 1440 + 1440) % 1440;
+
+    // 3. Standard Schedule Evaluation
     const schedule = [
-        { state: ClockState.WAKE, mins: getMinutes(config.wakeTime.startHour, config.wakeTime.startMinute) },
-        { state: ClockState.QUIET, mins: getMinutes(config.quietTime.startHour, config.quietTime.startMinute) },
+        { state: ClockState.WAKE, mins: wakeMins },
+        { state: ClockState.QUIET, mins: quietMins },
         { state: ClockState.STORY, mins: getMinutes(config.storyTime.startHour, config.storyTime.startMinute) },
         { state: ClockState.SLEEP, mins: getMinutes(config.sleepTime.startHour, config.sleepTime.startMinute) },
     ];
@@ -281,15 +295,25 @@ const App: React.FC = () => {
       {/* Rabbit (Z-10) */}
       <PixelRabbit clockState={clockState} weather={weather} />
 
+      {/* Weather Chip (top-left, out of the rabbit's way) */}
+      {weather && (
+        <div className="absolute top-2 left-2 z-40 pointer-events-none">
+          <div className="bg-black/40 border-2 border-white/20 rounded px-4 py-2 font-vcr text-white text-xl tracking-wide">
+            <span className="text-2xl">{weather.temp}°C {weather.condition}</span>
+            <span className="ml-3 text-white/70">💨 {weather.windSpeed}km/h {weather.windDir}</span>
+          </div>
+        </div>
+      )}
+
       {/* Content (Z-30) */}
-      <div className="relative z-30 flex flex-col items-center justify-center h-full w-full pointer-events-none">
+      <div className="relative z-30 flex flex-col items-center justify-center h-full w-full pointer-events-none pb-[14vh]">
         <div className={`
           text-2xl md:text-3xl font-pixel mb-4 text-center px-4 py-2 rounded border-4 transition-all duration-1000
-          ${clockState === ClockState.SLEEP ? 'text-red-500 border-red-900 bg-black/50' : ''}
-          ${clockState === ClockState.NAP ? 'text-blue-300 border-blue-900 bg-black/50' : ''}
-          ${clockState === ClockState.STORY ? 'text-purple-300 border-purple-900 bg-black/50' : ''}
-          ${clockState === ClockState.QUIET ? 'text-yellow-400 border-yellow-900 bg-black/50' : ''}
-          ${clockState === ClockState.WAKE ? 'text-neon-green border-green-900 bg-black/50' : ''}
+          ${clockState === ClockState.SLEEP ? 'text-red-500 border-red-900 bg-black/75' : ''}
+          ${clockState === ClockState.NAP ? 'text-blue-300 border-blue-900 bg-black/75' : ''}
+          ${clockState === ClockState.STORY ? 'text-purple-300 border-purple-900 bg-black/75' : ''}
+          ${clockState === ClockState.QUIET ? 'text-yellow-400 border-yellow-900 bg-black/75' : ''}
+          ${clockState === ClockState.WAKE ? 'text-neon-green border-green-900 bg-black/75' : ''}
         `}>
           {clockState === ClockState.SLEEP && "🌙 SLEEP MODE"}
           {clockState === ClockState.NAP && "☁️ NAP TIME"}
@@ -315,14 +339,8 @@ const App: React.FC = () => {
         {/* TimeDisplay now handles its own internal timer */}
         <TimeDisplay />
 
-        <div className="mt-4 flex flex-col items-center font-vcr text-white/50 text-xl tracking-widest animate-pulse px-4">
-          <div>{statusMessage}</div>
-          {weather && (
-             <div className="text-3xl mt-2 text-white/80 font-bold drop-shadow-md flex flex-col items-center gap-1">
-               <span>{weather.temp}°C {weather.condition}</span>
-               <span className="text-xl opacity-80">💨 {weather.windSpeed}km/h {weather.windDir}</span>
-             </div>
-          )}
+        <div className="mt-4 flex flex-col items-center font-vcr text-white/60 text-2xl tracking-widest px-4">
+          <div className="bg-black/40 border-2 border-white/15 rounded px-4 py-1">{statusMessage}</div>
         </div>
       </div>
 
