@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>LALIE 3D — sprite stack</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body { background: radial-gradient(120% 90% at 50% 42%, #1b0d31 0%, #0d0620 45%, #07030f 100%); }
+  body { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: #f5e7cf; }
+  #stage { position: fixed; inset: 0; display: grid; place-items: center; }
+  #stack { position: relative; line-height: 0; }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; }
+  #glow { position: absolute; inset: 0; filter: blur(7px); mix-blend-mode: screen; opacity: .85; pointer-events: none; }
+  #c { cursor: grab; touch-action: none; }
+  #c.drag { cursor: grabbing; }
+
+  .title { position: fixed; top: 18px; left: 22px; pointer-events: none; }
+  .title b { font-size: 18px; letter-spacing: .22em; color: #39ff14; text-shadow: 0 0 12px #39ff1488; }
+  .title span { display: block; margin-top: 4px; font-size: 10px; letter-spacing: .16em; color: #8f7fbf; }
+
+  .hint { position: fixed; top: 20px; right: 22px; font-size: 10px; letter-spacing: .1em; color: #7a6aa8; text-align: right; pointer-events: none; }
+
+  .bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); display: flex; gap: 14px; align-items: center;
+         padding: 9px 14px; background: #120a26dd; border: 1px solid #33205e; border-radius: 10px;
+         backdrop-filter: blur(6px); font-size: 10px; letter-spacing: .1em; color: #b7a8dd; white-space: nowrap; }
+  .ctl { display: flex; gap: 7px; align-items: center; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 74px; height: 3px; background: #3a2767; border-radius: 2px; outline: none; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 10px; height: 14px; background: #39ff14; border-radius: 2px; box-shadow: 0 0 8px #39ff1477; cursor: pointer; }
+  input[type=range]::-moz-range-thumb { width: 10px; height: 14px; border: 0; background: #39ff14; border-radius: 2px; cursor: pointer; }
+  button { font: inherit; letter-spacing: .1em; color: #d9ccff; background: #221344; border: 1px solid #3d2a70; border-radius: 6px; padding: 4px 8px; cursor: pointer; }
+  button:hover { border-color: #39ff14; color: #39ff14; }
+  .chk { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .chk input { accent-color: #39ff14; }
+  .sep { width: 1px; height: 18px; background: #33205e; }
+  @media (max-width: 760px) {
+    .bar { gap: 8px; padding: 7px 10px; bottom: 8px; font-size: 9px;
+           max-width: calc(100vw - 16px); flex-wrap: wrap; justify-content: center; border-radius: 12px; }
+    .ctl { gap: 5px; }
+    input[type=range] { width: 58px; }
+    .sep { display: none; }
+    .hint { display: none; }
+    .title { top: 12px; left: 14px; }
+    .title b { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="stack">
+    <canvas id="c"></canvas>
+    <canvas id="glow"></canvas>
+  </div>
+</div>
+
+<div class="title"><b>LALIE 3D</b><span>SPRITE STACK / 7-SEG VOXELS</span></div>
+<div class="hint">DRAG TO TURN · WHEEL TO ZOOM<br><span id="fps">-- FPS</span></div>
+
+<div class="bar">
+  <div class="ctl"><label for="gap">GAP</label><input id="gap" type="range" min="0" max="4" step="0.5" value="0"><span id="gapv">0</span></div>
+  <div class="ctl"><label for="pitch">PITCH</label><input id="pitch" type="range" min="30" max="100" step="1" value="62"><span id="pitchv">62</span></div>
+  <label class="chk"><input id="spin" type="checkbox" checked>TURN</label>
+  <label class="chk"><input id="bloom" type="checkbox" checked>GLOW</label>
+  <div class="sep"></div>
+  <button id="drop">DROP</button>
+  <button id="reset">RESET</button>
+</div>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- frame buffer
+const W = 320, H = 200;
+const cvs = document.getElementById("c");
+const ctx = cvs.getContext("2d", { alpha: false });
+cvs.width = W; cvs.height = H;
+const img = ctx.createImageData(W, H);
+const px = new Uint32Array(img.data.buffer);
+
+const gcv = document.getElementById("glow");
+const gctx = gcv.getContext("2d");
+gcv.width = W; gcv.height = H;
+const gimg = gctx.createImageData(W, H);
+const gpx = new Uint32Array(gimg.data.buffer);
+
+const ZB = new Int16Array(W * H);
+const SH = new Uint8Array(W * H);
+
+const pack = (r, g, b) => (255 << 24) | (b << 16) | (g << 8) | r;
+const clamp255 = v => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+
+// ---------------------------------------------------------------- palette
+// 1 body, 2 body light, 3 body dark, 4 bezel, 5 screen,
+// 6 led green, 7 led green off, 8 colon magenta, 9 cyan, 10 cream, 11 cream dark,
+// 12 metal, 13 metal dark, 14 rubber, 15 bell magenta, 16 bell dark, 17 gold,
+// 18 alarm led, 19 leaf, 20 glass, 21 coffee
+const BASE = {
+  1: [43, 26, 94], 2: [74, 54, 136], 3: [27, 15, 61], 4: [21, 10, 43], 5: [8, 4, 26],
+  6: [57, 255, 20], 7: [9, 24, 12], 8: [255, 47, 208], 9: [34, 230, 255],
+  10: [245, 231, 207], 11: [201, 183, 155], 12: [168, 176, 208], 13: [92, 100, 136],
+  14: [18, 14, 28], 15: [255, 47, 208], 16: [143, 22, 115], 17: [255, 200, 87],
+  18: [255, 68, 68], 19: [47, 224, 106], 20: [59, 47, 122], 21: [42, 20, 16]
+};
+const EMISSIVE = new Set([6, 8, 18]);
+const SHADE = [0.50, 0.68, 0.85, 1.0, 1.16];
+const COL = new Uint32Array(32 * 5);
+for (const k in BASE) {
+  const [r, g, b] = BASE[k];
+  for (let s = 0; s < 5; s++) {
+    const f = EMISSIVE.has(+k) ? 1.05 : SHADE[s];
+    COL[+k * 5 + s] = pack(clamp255(r * f), clamp255(g * f), clamp255(b * f));
+  }
+}
+const OUTLINE = pack(6, 3, 15);
+
+// ---------------------------------------------------------------- voxel grid
+const NX = 190, NY = 132, NZ = 100;
+const CX = 95, CY = 66;
+const grid = new Uint8Array(NX * NY * NZ);
+const nrm = new Uint8Array(NX * NY * NZ);
+const at = (x, y, z) => x + NX * (y + NY * z);
+const inside = (x, y, z) => x >= 0 && y >= 0 && z >= 0 && x < NX && y < NY && z < NZ;
+
+function put(x, y, z, m) {
+  if (inside(x, y, z)) grid[at(x, y, z)] = m;
+}
+function box(x0, x1, y0, y1, z0, z1, m) {
+  for (let z = z0; z <= z1; z++)
+    for (let y = y0; y <= y1; y++)
+      for (let x = x0; x <= x1; x++) put(x, y, z, m);
+}
+function rbox(x0, x1, y0, y1, z0, z1, r, m) {
+  for (let z = z0; z <= z1; z++)
+    for (let y = y0; y <= y1; y++)
+      for (let x = x0; x <= x1; x++) {
+        const dx = Math.max(x0 + r - x, 0, x - (x1 - r));
+        const dy = Math.max(y0 + r - y, 0, y - (y1 - r));
+        const dz = Math.max(z0 + r - z, 0, z - (z1 - r));
+        if (dx * dx + dy * dy + dz * dz <= r * r) put(x, y, z, m);
+      }
+}
+function cylZ(cx, cy, z0, z1, r, m) {
+  for (let z = z0; z <= z1; z++)
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++)
+      for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+        const dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy <= r * r) put(x, y, z, m);
+      }
+}
+function cylX(x0, x1, cy, cz, r, m, ridge) {
+  const cy0 = Math.floor(cy - r), cy1 = Math.ceil(cy + r);
+  const cz0 = Math.floor(cz - r), cz1 = Math.ceil(cz + r);
+  for (let x = x0; x <= x1; x++)
+    for (let y = cy0; y <= cy1; y++)
+      for (let z = cz0; z <= cz1; z++) {
+        const dy = y - cy, dz = z - cz;
+        let rr = r;
+        if (ridge) {
+          const a = Math.atan2(dz, dy);
+          if ((Math.floor((a + Math.PI) * 8 / Math.PI) & 1) === 0) rr += 0.9;
+        }
+        if (dy * dy + dz * dz <= rr * rr) put(x, y, z, m);
+      }
+}
+function dome(cx, cy, z0, r, h, m) {
+  for (let z = z0; z <= z0 + h; z++)
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++)
+      for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+        const dx = (x - cx) / r, dy = (y - cy) / r, dz = (z - z0) / h;
+        if (dx * dx + dy * dy + dz * dz <= 1) put(x, y, z, m);
+      }
+}
+function inRR(x0, x1, z0, z1, r, x, z) {
+  const dx = Math.max(x0 + r - x, 0, x - (x1 - r));
+  const dz = Math.max(z0 + r - z, 0, z - (z1 - r));
+  return dx * dx + dz * dz <= r * r;
+}
+function rframe(x0, x1, z0, z1, r, y, m) {
+  for (let z = z0; z <= z1; z++)
+    for (let x = x0; x <= x1; x++)
+      if (inRR(x0, x1, z0, z1, r, x, z) && !inRR(x0 + 1, x1 - 1, z0 + 1, z1 - 1, r - 1, x, z)) put(x, y, z, m);
+}
+function ringZ(cx, cy, z0, z1, r0, r1, m) {
+  for (let z = z0; z <= z1; z++)
+    for (let y = Math.floor(cy - r1); y <= Math.ceil(cy + r1); y++)
+      for (let x = Math.floor(cx - r1); x <= Math.ceil(cx + r1); x++) {
+        const d = Math.hypot(x - cx, y - cy);
+        if (d >= r0 && d <= r1) put(x, y, z, m);
+      }
+}
+function sphere(cx, cy, cz, r, m) {
+  const r2 = r * r;
+  for (let z = Math.floor(cz - r); z <= Math.ceil(cz + r); z++)
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++)
+      for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+        const dx = x - cx, dy = y - cy, dz = z - cz;
+        if (dx * dx + dy * dy + dz * dz <= r2) put(x, y, z, m);
+      }
+}
+function ellipsoid(cx, cy, cz, rx, ry, rz, m, tilt) {
+  const ct = Math.cos(tilt || 0), st = Math.sin(tilt || 0);
+  for (let z = Math.floor(cz - rz); z <= Math.ceil(cz + rz); z++)
+    for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++)
+      for (let x = Math.floor(cx - rx - rz); x <= Math.ceil(cx + rx + rz); x++) {
+        const dx0 = x - cx, dz0 = z - cz;
+        const dx = dx0 * ct - dz0 * st, dz = dx0 * st + dz0 * ct;
+        const dy = y - cy;
+        if ((dx * dx) / (rx * rx) + (dy * dy) / (ry * ry) + (dz * dz) / (rz * rz) <= 1) put(x, y, z, m);
+      }
+}
+
+// ---------------------------------------------------------------- 7-seg digits
+const SEG = {
+  "0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc",
+  "5": "afgcd", "6": "afgecd", "7": "abc", "8": "abcdefg", "9": "abcdfg"
+};
+const DW = 13, DH = 25, T = 3;
+function segRect(x0, z0, s) {
+  switch (s) {
+    case "a": return [x0 + 2, x0 + DW - 3, z0 + 22, z0 + 24];
+    case "g": return [x0 + 2, x0 + DW - 3, z0 + 11, z0 + 13];
+    case "d": return [x0 + 2, x0 + DW - 3, z0 + 0, z0 + 2];
+    case "f": return [x0, x0 + 2, z0 + 14, z0 + 21];
+    case "b": return [x0 + DW - 3, x0 + DW - 1, z0 + 14, z0 + 21];
+    case "e": return [x0, x0 + 2, z0 + 3, z0 + 10];
+    case "c": return [x0 + DW - 3, x0 + DW - 1, z0 + 3, z0 + 10];
+  }
+}
+function digit(x0, z0, ch, y0, y1) {
+  const on = SEG[ch] || "";
+  for (const s of "abcdefg") {
+    const r = segRect(x0, z0, s);
+    box(r[0], r[1], y0, y1, r[2], r[3], on.includes(s) ? 6 : 7);
+  }
+}
+// 3x5 pixel font
+const FONT = {
+  "0": ["111", "101", "101", "101", "111"], "1": ["010", "110", "010", "010", "111"],
+  "2": ["111", "001", "111", "100", "111"], "3": ["111", "001", "111", "001", "111"],
+  "4": ["101", "101", "111", "001", "001"], "5": ["111", "100", "111", "001", "111"],
+  "6": ["111", "100", "111", "101", "111"], "7": ["111", "001", "001", "001", "001"],
+  "8": ["111", "101", "111", "101", "111"], "9": ["111", "101", "111", "001", "111"],
+  A: ["010", "101", "111", "101", "101"], D: ["110", "101", "101", "101", "110"],
+  E: ["111", "100", "111", "100", "111"], I: ["111", "010", "010", "010", "111"],
+  J: ["001", "001", "001", "101", "111"], L: ["100", "100", "100", "100", "111"],
+  M: ["101", "111", "111", "101", "101"], N: ["110", "101", "101", "101", "101"],
+  R: ["110", "101", "110", "101", "101"], S: ["111", "100", "111", "001", "111"],
+  U: ["101", "101", "101", "101", "111"], V: ["101", "101", "101", "101", "010"],
+  " ": ["000", "000", "000", "000", "000"]
+};
+// 5x7 pixel font for the small print
+const FONT7 = {
+  "0": ["01110", "10001", "10001", "10001", "10001", "10001", "01110"],
+  "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+  "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+  "3": ["11111", "00010", "00100", "00010", "00001", "10001", "01110"],
+  "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+  "5": ["11111", "10000", "11110", "00001", "00001", "10001", "01110"],
+  "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
+  "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+  "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+  "9": ["01110", "10001", "10001", "01111", "00001", "00010", "01100"],
+  A: ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+  D: ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+  E: ["11111", "10000", "11110", "10000", "10000", "10000", "11111"],
+  I: ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+  J: ["00111", "00010", "00010", "00010", "10010", "10010", "01100"],
+  L: ["10000", "10000", "10000", "10000", "10000", "10000", "11111"],
+  M: ["10001", "11011", "10101", "10001", "10001", "10001", "10001"],
+  N: ["10001", "11001", "10101", "10011", "10001", "10001", "10001"],
+  R: ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+  S: ["01111", "10000", "10000", "01110", "00001", "00001", "11110"],
+  U: ["10001", "10001", "10001", "10001", "10001", "10001", "01110"],
+  V: ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+  " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"]
+};
+function text7(str, x0, zTop, y0, y1, m, flip) {
+  for (let i = 0; i < str.length; i++) {
+    const g = FONT7[str[i]];
+    if (!g) continue;
+    const bx = flip ? x0 + (str.length - 1 - i) * 6 : x0 + i * 6;
+    for (let r = 0; r < 7; r++)
+      for (let c = 0; c < 5; c++)
+        if (g[r][c] === "1") {
+          const cx = bx + (flip ? 4 - c : c);
+          box(cx, cx, y0, y1, zTop - r, zTop - r, m);
+        }
+  }
+}
+function text3(str, x0, zTop, y0, y1, m, sc) {
+  sc = sc || 1;
+  for (let i = 0; i < str.length; i++) {
+    const g = FONT[str[i]];
+    if (!g) continue;
+    for (let r = 0; r < 5; r++)
+      for (let c = 0; c < 3; c++)
+        if (g[r][c] === "1")
+          box(x0 + i * 4 * sc + c * sc, x0 + i * 4 * sc + c * sc + sc - 1,
+              y0, y1, zTop - r * sc - (sc - 1), zTop - r * sc, m);
+  }
+}
+
+// ---------------------------------------------------------------- the model
+let layers = [];
+let columns = [];
+
+function buildModel(now) {
+  grid.fill(0);
+
+  // ---- desk clock body
+  rbox(47, 143, 42, 84, 10, 74, 8, 1);
+  // top bevel + bottom shade strip
+  box(51, 139, 44, 82, 73, 74, 2);
+  box(50, 140, 44, 82, 10, 11, 3);
+  // front plate
+  rbox(51, 139, 40, 42, 14, 70, 5, 4);
+  // cyan pinstripe frame, rounded to match the plate
+  rframe(51, 139, 14, 70, 6, 39, 9);
+  // screen recess: dark border, then the glass
+  box(55, 135, 39, 39, 25, 57, 3);
+  box(56, 134, 38, 39, 26, 56, 5);
+  // screen glare
+  box(58, 62, 38, 38, 50, 55, 20);
+  box(59, 63, 38, 38, 48, 49, 20);
+
+  // ---- digits HH:MM
+  const s = String(now.getHours()).padStart(2, "0") + String(now.getMinutes()).padStart(2, "0");
+  digit(58, 27, s[0], 36, 37);
+  digit(75, 27, s[1], 36, 37);
+  digit(102, 27, s[2], 36, 37);
+  digit(119, 27, s[3], 36, 37);
+  // colon
+  box(92, 94, 36, 37, 40, 42, 8);
+  box(92, 94, 36, 37, 32, 34, 8);
+
+  // ---- face details
+  text3("LALIE", 76, 66, 40, 41, 10, 2);
+  // alarm led + sun/moon icon
+  box(58, 60, 40, 41, 58, 60, 18);
+  const day = now.getHours() >= 7 && now.getHours() < 20;
+  if (day) {
+    box(129, 131, 40, 41, 60, 61, 17);
+    box(128, 132, 40, 41, 59, 59, 17);
+    box(128, 132, 40, 41, 62, 62, 17);
+    box(129, 131, 40, 41, 58, 58, 17);
+    box(127, 127, 40, 41, 60, 61, 17);
+    box(133, 133, 40, 41, 60, 61, 17);
+    box(130, 130, 40, 41, 57, 57, 17);
+    box(130, 130, 40, 41, 63, 63, 17);
+  } else {
+    ellipsoid(130, 40, 60, 4, 1.2, 4, 10, 0);
+    box(128, 131, 40, 41, 59, 60, 5);
+  }
+  // date line + speaker grille on the lower strip
+  const DOW = ["DIM", "LUN", "MAR", "MER", "JEU", "VEN", "SAM"];
+  text7(DOW[now.getDay()] + " " + now.getDate(), 78, 24, 40, 41, 10);
+  for (let x = 122; x <= 132; x += 3)
+    for (let z = 17; z <= 23; z += 3) put(x, 40, z, 3);
+  // magenta accent line under the glass
+  box(56, 134, 40, 40, 15, 15, 16);
+  // corner screws
+  for (const [sx, sz] of [[54, 67], [136, 67], [54, 17], [136, 17]]) box(sx, sx, 40, 41, sz, sz, 13);
+
+  // ---- top: twin bells, hammer, snooze bar
+  for (const bx of [68, 122]) {
+    cylZ(bx, 62, 74, 75, 13, 16);          // brim shadow
+    ringZ(bx, 62, 74, 75, 11, 13, 15);     // brim top
+    dome(bx, 62, 76, 11, 11, 15);          // dome
+    ringZ(bx, 62, 79, 79, 9, 11, 16);      // seam
+    cylZ(bx, 62, 87, 91, 2, 12);           // stem
+    sphere(bx, 62, 92, 3, 17);             // top knob
+  }
+  // hammer: post, two arms, double striker between the bells
+  box(92, 98, 59, 65, 74, 75, 13);
+  box(93, 97, 60, 64, 75, 75, 12);
+  box(94, 96, 61, 63, 76, 91, 12);
+  box(82, 96, 61, 63, 79, 81, 12);
+  box(96, 110, 61, 63, 79, 81, 12);
+  sphere(81, 62, 80, 3, 15);
+  sphere(111, 62, 80, 3, 15);
+  sphere(95, 62, 93, 2, 17);
+  box(79, 111, 60, 64, 75, 76, 13);
+  // snooze bar
+  rbox(77, 113, 37, 46, 74, 78, 3, 9);
+  box(81, 109, 38, 45, 78, 78, 2);
+
+  // ---- right side: knobs, left side: switch
+  cylX(143, 148, 62, 50, 6, 12, true);
+  cylX(148, 150, 62, 50, 4, 15, false);
+  cylX(143, 148, 62, 30, 5, 12, true);
+  cylX(148, 149, 62, 30, 3, 9, false);
+  box(44, 46, 58, 62, 38, 46, 9);
+
+  // ---- back: hatch, vents, label, cable + plug
+  box(62, 92, 84, 85, 18, 32, 3);
+  box(64, 90, 85, 85, 20, 30, 4);
+  for (let i = 0; i < 5; i++) box(100 + i * 6, 102 + i * 6, 84, 85, 52, 62, 4);
+  text7("LALIE 3D", 92, 24, 84, 84, 10, true);
+  for (let t = 0; t < 1; t += 0.004) {
+    const cx = 142 + 14 * t + 2 * Math.sin(t * 7);
+    const cy = 66 + 44 * t;
+    const cz = 14 - 14 * Math.pow(t, 1.15);
+    sphere(cx, cy, cz, 2, 14);
+  }
+  rbox(154, 164, 108, 118, 0, 5, 2, 14);
+  box(156, 162, 110, 116, 0, 1, 12);
+
+  // ---- feet
+  for (const [fx, fy] of [[59, 50], [117, 50], [59, 64], [117, 64]]) {
+    rbox(fx, fx + 14, fy, fy + 14, 0, 10, 5, 14);
+    box(fx + 3, fx + 10, fy + 3, fy + 10, 0, 0, 12);
+  }
+
+  // ---- props: mug (front left), plant (front right)
+  cylZ(30, 102, 0, 1, 13, 11);            // saucer
+  cylZ(30, 102, 1, 16, 9, 10);            // body
+  cylZ(30, 102, 10, 12, 9, 15);           // band
+  cylZ(30, 102, 15, 16, 7, 21);           // coffee
+  ringZ(30, 102, 16, 16, 7, 9, 10);       // rim
+  for (let a = 1.75; a <= 4.5; a += 0.07) {
+    const hx = 30 + Math.cos(a) * 12, hz = 8 + Math.sin(a) * 12;
+    sphere(hx, 102, hz, 2, 10);
+  }
+  // plant
+  cylZ(170, 84, 0, 10, 8, 11);
+  cylZ(170, 84, 9, 11, 8, 15);
+  cylZ(170, 84, 10, 11, 6, 21);
+  for (const [lx, lz, lr, tl] of [[170, 15, 4, 0.5], [164, 19, 4, 0.9], [176, 20, 5, -0.7], [161, 24, 3, 1.2], [179, 25, 4, -1.1]]) {
+    sphere(lx, 84, lz, lr, 19);
+    ellipsoid(lx - 3, 84, lz + 4, 2, 2, 6, 19, tl);
+  }
+
+  bake();
+}
+
+const NB = [[0, -1, 0], [0, 0, 1], [1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, -1]];
+const cols = [];
+function bake() {
+  nrm.fill(0);
+  layers = [];
+  columns = [];
+  for (let z = 0; z < NZ; z++) {
+    const list = [];
+    for (let y = 0; y < NY; y++) {
+      for (let x = 0; x < NX; x++) {
+        const i = at(x, y, z);
+        const m = grid[i];
+        if (!m) continue;
+        let n = -1, open = false;
+        for (let k = 0; k < 6; k++) {
+          const nx = x + NB[k][0], ny = y + NB[k][1], nz = z + NB[k][2];
+          const empty = !inside(nx, ny, nz) || !grid[at(nx, ny, nz)];
+          if (empty) { open = true; if (n < 0) n = k; }
+        }
+        // interior voxels still fill the stack, so keep them
+        // ambient occlusion from empty cells in the 3x3x3 block
+        let holes = 0;
+        for (let dz = -1; dz <= 1; dz++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (let dx = -1; dx <= 1; dx++) {
+              if (!dx && !dy && !dz) continue;
+              const nx = x + dx, ny = y + dy, nz = z + dz;
+              if (!inside(nx, ny, nz) || !grid[at(nx, ny, nz)]) holes++;
+            }
+        const ao = open ? (holes <= 4 ? 2 : holes <= 7 ? 1 : 0) : 2;
+        if (n < 0) n = 1;
+        nrm[i] = n;
+        list.push(x | (y << 8) | (m << 16) | (n << 21) | (ao << 24));
+      }
+    }
+    if (list.length) layers[z] = Uint32Array.from(list);
+  }
+  // ground columns for the shadow
+  for (let y = 0; y < NY; y++)
+    for (let x = 0; x < NX; x++) {
+      let h = 0;
+      for (let z = NZ - 1; z >= 0; z--) if (grid[at(x, y, z)]) { h = z; break; }
+      if (h) columns.push(x, y, h);
+    }
+}
+
+// ---------------------------------------------------------------- scene backdrop
+const BG = new Uint32Array(W * H);
+const HORIZON = 126;
+
+function buildBG() {
+  // sky gradient + stars
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      let c;
+      if (y < HORIZON) {
+        const t = y / HORIZON;
+        const r = 12 + 18 * t, g = 5 + 9 * t, b = 28 + 26 * t;
+        c = pack(r, g, b);
+      } else {
+        const t = (y - HORIZON) / (H - HORIZON);
+        const r = 26 - 10 * t, g = 12 - 4 * t, b = 38 - 14 * t;
+        c = pack(r, g, b);
+      }
+      BG[y * W + x] = c;
+    }
+  }
+  // moon
+  for (let y = -11; y <= 11; y++)
+    for (let x = -11; x <= 11; x++) {
+      if (x * x + y * y > 121) continue;
+      const sx = 258 + x, sy = 40 + y;
+      let c = pack(232, 226, 206);
+      if ((x + 5) * (x + 5) + (y + 3) * (y + 3) < 9) c = pack(206, 200, 182);
+      if ((x - 4) * (x - 4) + (y - 5) * (y - 5) < 5) c = pack(210, 204, 186);
+      BG[sy * W + sx] = c;
+    }
+  // star field (fixed pattern, twinkle scaled on top at runtime)
+  let seed = 12345;
+  const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let i = 0; i < 130; i++) {
+    const x = (rnd() * W) | 0, y = (rnd() * (HORIZON - 10)) | 0;
+    const v = 60 + rnd() * 120;
+    BG[y * W + x] = pack(v * 0.8, v * 0.85, v);
+    if (rnd() > 0.85) BG[y * W + x + 1] = pack(v * 0.5, v * 0.5, v * 0.7);
+  }
+  // table surface: wood grain in perspective rows
+  for (let y = HORIZON; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const t = (y - HORIZON) / (H - HORIZON);
+      const wave = Math.sin(x * 0.09 + y * 0.35) * 4 + Math.sin(x * 0.31 - y * 0.11) * 2;
+      const r = 26 + 10 * t + wave, g = 12 + 5 * t + wave * 0.45, b = 40 + 14 * t + wave * 0.8;
+      BG[y * W + x] = pack(clamp255(r), clamp255(g), clamp255(b));
+    }
+  }
+  // warm glow pool behind the clock
+  for (let y = HORIZON - 30; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const dx = (x - 160) / 120, dy = (y - 150) / 62;
+      const d = 1 - Math.min(1, Math.sqrt(dx * dx + dy * dy));
+      if (d <= 0) continue;
+      const i = y * W + x;
+      const c = BG[i];
+      const r = (c & 255), g = (c >> 8) & 255, b = (c >> 16) & 255;
+      const k = d * d * 0.35;
+      BG[i] = pack(r + 60 * k, g + 22 * k, b + 40 * k);
+    }
+}
+buildBG();
+
+// ---------------------------------------------------------------- camera + light
+const cam = { yaw: 0.38, f: 0.62, gap: 0, ox: 160, oy: 152, scale: 3 };
+const SUN = (() => {
+  const v = [-0.5, -0.55, 0.67];
+  const l = Math.hypot(...v);
+  return v.map(a => a / l);
+})();
+
+const shadeTab = new Uint8Array(8);
+const visTab = new Uint8Array(8);
+let showFace = 1;
+function updateLight() {
+  const c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
+  showFace = c > 0.18 ? 1 : 0;
+  for (let k = 0; k < 6; k++) {
+    const [nx, ny, nz] = NB[k];
+    const wx = nx * c - ny * s, wy = nx * s + ny * c, wz = nz;
+    const t = wx * SUN[0] + wy * SUN[1] + wz * SUN[2];
+    shadeTab[k] = t > 0.72 ? 4 : t > 0.38 ? 3 : t > 0.05 ? 2 : t > -0.35 ? 1 : 0;
+    // face the camera? camera sits in front (-y) and above (+z)
+    visTab[k] = (wy * -1 + wz * 0.9) > -0.02 ? 1 : 0;
+  }
+}
+
+// ---------------------------------------------------------------- motes
+const motes = [];
+for (let i = 0; i < 26; i++) {
+  motes.push({
+    x: 10 + Math.random() * 170, y: 30 + Math.random() * 90, z: 8 + Math.random() * 60,
+    ph: Math.random() * 6.28, sp: 0.4 + Math.random() * 0.9, br: 90 + Math.random() * 110
+  });
+}
+
+// ---------------------------------------------------------------- drop animation
+let dropT0 = performance.now() + 350;
+const dropOff = new Int16Array(NZ);
+function updateDrop(now) {
+  const life = 700;
+  for (let z = 0; z < NZ; z++) {
+    const p = Math.min(1, Math.max(0, (now - dropT0 - (NZ - z) * 3.5) / life));
+    const e = 1 - Math.pow(1 - p, 3);
+    dropOff[z] = Math.round(-(1 - e) * 150);
+  }
+}
+
+// ---------------------------------------------------------------- render
+let fpsAcc = 0, fpsN = 0, fpsT = performance.now();
+const fpsEl = document.getElementById("fps");
+
+function render(now) {
+  const c = Math.cos(cam.yaw), s = Math.sin(cam.yaw);
+  const f = cam.f, sp = 1 + cam.gap;
+
+  px.set(BG);
+
+  // twinkling stars: sparse add
+  for (let i = 0; i < 5; i++) {
+    const x = ((now * 0.02 + i * 71) % W) | 0;
+    const y = ((i * 37 + 13) % (HORIZON - 12)) | 0;
+    const i2 = y * W + x;
+    px[i2] = pack(150, 160, 210);
+  }
+
+  // dust motes (world space, rotate with the model)
+  for (const m of motes) {
+    const dz = Math.sin(now * 0.0006 * m.sp + m.ph) * 0.5 + 0.5;
+    const mz = m.z + dz * 22;
+    const dx = m.x - CX, dy = m.y - CY;
+    const sx = Math.round(cam.ox + dx * c - dy * s);
+    const sy = Math.round(cam.oy - (dx * s + dy * c) * f - mz * sp);
+    if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;
+    const v = m.br * (0.5 + 0.5 * Math.sin(now * 0.003 + m.ph));
+    px[sy * W + sx] = pack(v * 0.7, v * 0.85, v);
+  }
+
+  // cast shadow on the table
+  SH.fill(0);
+  for (let i = 0; i < columns.length; i += 3) {
+    const x = columns[i], y = columns[i + 1], h = columns[i + 2];
+    const gx = x + h * 0.73, gy = y + h * 0.83;
+    const dx = gx - CX, dy = gy - CY;
+    const sx = Math.round(cam.ox + dx * c - dy * s);
+    const sy = Math.round(cam.oy - (dx * s + dy * c) * f);
+    for (let oy2 = 0; oy2 < 2; oy2++)
+      for (let ox2 = 0; ox2 < 2; ox2++) {
+        const X = sx + ox2, Y = sy + oy2;
+        if (X < 0 || X >= W || Y < HORIZON || Y >= H) continue;
+        const j = Y * W + X;
+        SH[j] = Math.min(185, SH[j] + 52);
+      }
+  }
+  for (let y = HORIZON; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const j = y * W + x, v = SH[j];
+      if (!v) continue;
+      const col = px[j];
+      const k = 1 - (v / 255) * 0.85;
+      px[j] = pack((col & 255) * k, ((col >> 8) & 255) * k, ((col >> 16) & 255) * k);
+    }
+
+  // green spill from the display onto the table
+  {
+    const dx0 = 95 - CX, dy0 = 46 - CY;
+    const gx = cam.ox + dx0 * c - dy0 * s;
+    const gy = cam.oy - (dx0 * s + dy0 * c) * f + 26;
+    for (let yy = -18; yy <= 18; yy++)
+      for (let xx = -34; xx <= 34; xx++) {
+        const X = Math.round(gx + xx), Y = Math.round(gy + yy);
+        if (X < 0 || X >= W || Y < HORIZON || Y >= H) continue;
+        const d = Math.sqrt((xx / 34) * (xx / 34) + (yy / 18) * (yy / 18));
+        if (d > 1) continue;
+        const k = (1 - d) * (1 - d) * 0.55;
+        const i2 = Y * W + X, col = px[i2];
+        px[i2] = pack(clamp255((col & 255) + 40 * k), clamp255(((col >> 8) & 255) + 120 * k), clamp255(((col >> 16) & 255) + 45 * k));
+      }
+  }
+
+  // slices, bottom to top
+  ZB.fill(-1);
+  gpx.fill(0);
+  for (let z = 0; z < NZ; z++) {
+    const list = layers[z];
+    if (!list) continue;
+    const baseY = cam.oy + dropOff[z] - z * sp;
+    for (let k = 0; k < list.length; k++) {
+      const v = list[k];
+      const x = v & 255, y = (v >> 8) & 255, m = (v >> 16) & 31, n = (v >> 21) & 7, ao = (v >> 24) & 3;
+      if (!showFace && (m === 6 || m === 7 || m === 8 || m === 18 || m === 20)) continue;
+      if (!visTab[n]) continue;
+      const dx = x - CX, dy = y - CY;
+      const sx = (cam.ox + dx * c - dy * s + 0.5) | 0;
+      const sy = (baseY - (dx * s + dy * c) * f + 0.5) | 0;
+      if (sx < 0 || sx >= W || sy < 0 || sy >= H) continue;
+      const i = sy * W + sx;
+      if (z < ZB[i]) continue;
+      ZB[i] = z;
+      const ci = (m === 8 && !colonOn ? 16 : m) * 5 + Math.max(0, shadeTab[n] - ao);
+      px[i] = COL[ci];
+      if (EMISSIVE.has(m)) gpx[i] = COL[ci];
+    }
+  }
+
+  // outline pass
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      const i = y * W + x;
+      const z = ZB[i];
+      if (z < 0) continue;
+      const a = ZB[i - 1], b = ZB[i + 1], u = ZB[i - W], d = ZB[i + W];
+      if (a < 0 || b < 0 || u < 0 || d < 0) { px[i] = OUTLINE; continue; }
+      const drop = z - Math.min(a, b, u, d);
+      if (drop > 10) px[i] = OUTLINE;
+    }
+  }
+
+  // steam above the mug
+  if (Math.abs(cam.yaw) < 2.4) {
+    for (let i = 0; i < 3; i++) {
+      const t = ((now * 0.00035) + i * 0.33) % 1;
+      const wx = 30 + Math.sin(t * 6 + i) * 2.4;
+      const wy = 100;
+      const wz = 18 + t * 30;
+      const dx = wx - CX, dy = wy - CY;
+      const sx = Math.round(cam.ox + dx * c - dy * s);
+      const sy = Math.round(cam.oy - (dx * s + dy * c) * f - wz * sp);
+      if (sx > 0 && sx < W - 1 && sy > 0 && sy < H) {
+        const v = 255 * (1 - t);
+        px[sy * W + sx] = pack(v * 0.55, v * 0.9, v);
+      }
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+  gctx.putImageData(gimg, 0, 0);
+
+  // fps
+  fpsAcc += now - fpsT; fpsN++; fpsT = now;
+  if (fpsAcc > 500) {
+    fpsEl.textContent = Math.round(1000 / (fpsAcc / fpsN)) + " FPS";
+    fpsAcc = 0; fpsN = 0;
+  }
+}
+
+// ---------------------------------------------------------------- state + loop
+let colonOn = true;
+let lastMinute = -1;
+let spinPause = 0;
+let dragging = false;
+let autoSpin = true;
+let glowOn = true;
+
+function ensureModel(now) {
+  const d = new Date();
+  const key = d.getHours() * 60 + d.getMinutes();
+  if (key !== lastMinute) {
+    lastMinute = key;
+    buildModel(d);
+  }
+}
+
+// ---------------------------------------------------------------- controls
+const gapEl = document.getElementById("gap");
+const pitchEl = document.getElementById("pitch");
+const spinEl = document.getElementById("spin");
+const bloomEl = document.getElementById("bloom");
+
+const gapv = document.getElementById("gapv");
+const pitchv = document.getElementById("pitchv");
+gapEl.addEventListener("input", e => { cam.gap = parseFloat(e.target.value); gapv.textContent = e.target.value; });
+pitchEl.addEventListener("input", e => { cam.f = parseFloat(e.target.value) / 100; pitchv.textContent = e.target.value; });
+spinEl.addEventListener("change", e => autoSpin = e.target.checked);
+bloomEl.addEventListener("change", e => {
+  glowOn = e.target.checked;
+  gcv.style.display = glowOn ? "block" : "none";
+});
+document.getElementById("drop").addEventListener("click", () => dropT0 = performance.now());
+document.getElementById("reset").addEventListener("click", () => {
+  cam.yaw = 0.38; cam.f = 0.62; cam.gap = 0;
+  gapEl.value = "0"; pitchEl.value = "62"; gapv.textContent = "0"; pitchv.textContent = "62";
+  dropT0 = performance.now();
+});
+
+let lastX = 0, lastY = 0;
+cvs.addEventListener("pointerdown", e => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY;
+  cvs.setPointerCapture(e.pointerId); cvs.classList.add("drag");
+});
+cvs.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  cam.yaw += dx * 0.008;
+  cam.f = Math.min(1, Math.max(0.3, cam.f + dy * 0.003));
+  pitchEl.value = String(Math.round(cam.f * 100));
+  pitchv.textContent = pitchEl.value;
+  spinPause = performance.now() + 2600;
+});
+const endDrag = e => {
+  dragging = false; cvs.classList.remove("drag");
+  if (e && e.pointerId != null) { try { cvs.releasePointerCapture(e.pointerId); } catch (_) {} }
+  spinPause = performance.now() + 1800;
+};
+cvs.addEventListener("pointerup", endDrag);
+cvs.addEventListener("pointercancel", endDrag);
+cvs.addEventListener("wheel", e => {
+  e.preventDefault();
+  cam.scale = Math.min(6, Math.max(1, cam.scale - Math.sign(e.deltaY) * 0.25));
+  resize();
+}, { passive: false });
+
+function resize() {
+  let s = Math.max(0.6, Math.min(cam.scale, Math.min(window.innerWidth * 0.96 / W, window.innerHeight * 0.9 / H)));
+  if (s >= 2) s = Math.floor(s);
+  const w = W * s, h = H * s;
+  for (const el of [cvs, gcv]) {
+    el.style.width = w + "px"; el.style.height = h + "px";
+  }
+}
+window.addEventListener("resize", resize);
+
+// ---------------------------------------------------------------- boot
+ensureModel();
+resize();
+let lastT = performance.now();
+function tick(now) {
+  const dt = Math.min(64, now - lastT);
+  lastT = now;
+  if (autoSpin && !dragging && now > spinPause) cam.yaw += dt * 0.00022;
+  colonOn = (Math.floor(now / 500) % 2) === 0;
+  ensureModel(now);
+  updateLight();
+  updateDrop(now);
+  render(now);
+  requestAnimationFrame(tick);
+}
+updateLight();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
